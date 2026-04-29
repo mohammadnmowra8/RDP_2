@@ -1,4 +1,4 @@
-name: RDP-Stable-0000
+name: RDP-Stable-Mohammad
 
 on:
   workflow_dispatch:
@@ -6,27 +6,28 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360 # الحد الأقصى لـ GitHub هو 6 ساعات
+    timeout-minutes: 360 # الحد الأقصى لـ GitHub
 
     steps:
-      - name: Configure Windows & Disable Password Complexity
+      - name: Configure Windows Settings
         run: |
-          # تعطيل شروط تعقيد كلمة المرور لكي يقبل "0000"
-          secedit /export /cfg config.inf
-          (Get-Content config.inf) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content config.inf
-          secedit /configure /db %temp%\temp.sdb /cfg config.inf /areas SECURITYPOLICY
-          
-          # تفعيل الـ RDP
+          # تفعيل الـ RDP وإعدادات الوصول
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+          
+          # منع الجهاز من الخمول (Sleep)
+          powercfg /x -hibernate-timeout-ac 0
 
-      - name: Create RDP User with Password 0000
+      - name: Create RDP User (mohammad2020)
         run: |
-          $Password = ConvertTo-SecureString "0000" -AsPlainText -Force
-          New-LocalUser -Name "RDP_User" -Password $Password -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP_User"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP_User"
+          # إنشاء المستخدم وتعيين الباسورد
+          net user RDP_User mohammad2020 /add /y
+          net localgroup Administrators RDP_User /add
+          net localgroup "Remote Desktop Users" RDP_User /add
+          
+          # جعل الباسورد لا ينتهي أبداً
+          wmic useraccount where name='RDP_User' set passwordexpires=false
 
       - name: Install and Connect Tailscale
         run: |
@@ -37,18 +38,17 @@ jobs:
           $tsIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Keep Alive Loop
+      - name: Final Connection Info & Keep Alive
         run: |
           Write-Host "========================================"
-          Write-Host "IP Address : $env:TS_IP"
-          Write-Host "Username   : RDP_User"
-          Write-Host "Password   : 0000"
+          Write-Host "RDP Address: $env:TS_IP"
+          Write-Host "Username: RDP_User"
+          Write-Host "Password: mohammad2020"
           Write-Host "========================================"
           
-          # حلقة التكرار لضمان بقاء الجهاز يعمل
+          # حلقة البقاء حياً لمنع إغلاق السيرفر
           $i = 0
           while($true) {
-            Write-Host "RDP is running... Time elapsed: $i minutes"
+            Write-Host "RDP is Active... Time: $(Get-Date)"
             Start-Sleep -Seconds 60
-            $i++
           }
