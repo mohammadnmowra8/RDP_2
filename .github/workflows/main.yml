@@ -1,4 +1,4 @@
-name: RDP-Stable-Mohammad
+name: RDP-Stable
 
 on:
   workflow_dispatch:
@@ -6,55 +6,64 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 360 # الحد الفعلي لجيتهاب هو 6 ساعات
 
     steps:
-      - name: Force Disable Password Policy & Create User
+      - name: Configure Core RDP & Disable Password Policy
         run: |
-          # 1. تصدير سياسة الأمان الحالية
+          # تفعيل الـ RDP وتخفيف قيود الحماية للوصول السهل
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          
+          # تعطيل جدار الحماية للمنافذ المطلوبة
+          netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389
+          
+          # تصدير وتعطيل سياسة تعقيد كلمة المرور
           secedit /export /cfg config.inf
-          
-          # 2. تعديل السياسة لتعطيل التعقيد وطول الباسورد برمجياً
-          $config = Get-Content config.inf
-          $config = $config -replace "PasswordComplexity = 1", "PasswordComplexity = 0"
-          $config = $config -replace "MinimumPasswordLength = .*", "MinimumPasswordLength = 0"
-          $config | Set-Content config.inf
-          
-          # 3. إعادة تطبيق السياسة المعدلة على النظام
+          (Get-Content config.inf) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' -replace 'MinimumPasswordLength = .*', 'MinimumPasswordLength = 0' | Set-Content config.inf
           secedit /configure /db $env:temp\temp.sdb /cfg config.inf /areas SECURITYPOLICY
-          
-          # 4. إنشاء المستخدم باستخدام PowerShell Core (أكثر استقراراً)
-          $Password = ConvertTo-SecureString "mohammad2020" -AsPlainText -Force
-          New-LocalUser -Name "mohammad_rdp" -Password $Password -Description "RDP User" -AccountNeverExpires
-          
-          # 5. إضافة الصلاحيات
-          Add-LocalGroupMember -Group "Administrators" -Member "mohammad_rdp"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "mohammad_rdp"
-          
-          # 6. تفعيل الـ RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
 
-      - name: Install and Connect Tailscale
+      - name: Create RDP User
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi" -OutFile "tailscale.msi"
-          Start-Process msiexec.exe -ArgumentList "/i", "tailscale.msi", "/quiet", "/norestart" -Wait
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner
+          # إنشاء المستخدم بالباسورد المطلوب مباشرة
+          $password = "mohammad2020"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          $user = New-LocalUser -Name "RDP_User" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP_User"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP_User"
           
-          $tsIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          echo "PASS=mohammad2020" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile "tailscale.msi"
+          Start-Process msiexec.exe -ArgumentList "/i", "tailscale.msi", "/quiet", "/norestart" -Wait
+
+      - name: Establish Tailscale Connection
+        run: |
+          # تأكد من تحديث الـ Auth Key في الـ Secrets
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner --reset
+          
+          $tsIP = ""
+          $timeout = 0
+          while (-not $tsIP -and $timeout -lt 12) {
+              $tsIP = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $timeout++
+          }
           echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Final Connection Info & Keep Alive
+      - name: Maintain Connection
         run: |
-          Write-Host "========================================"
-          Write-Host "RDP Address: $env:TS_IP"
-          Write-Host "Username: mohammad_rdp"
-          Write-Host "Password: mohammad2020"
-          Write-Host "========================================"
+          Write-Host "`n=== RDP ACCESS INFO ==="
+          Write-Host "Address: $env:TS_IP"
+          Write-Host "Username: RDP_User"
+          Write-Host "Password: $env:PASS"
+          Write-Host "========================`n"
           
-          $i = 0
-          while($true) {
-            Write-Host "RDP Active... [$(Get-Date)]"
-            Start-Sleep -Seconds 60
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Session expires in 6 hours total"
+              Start-Sleep -Seconds 300
           }
