@@ -6,28 +6,35 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360 # الحد الأقصى لـ GitHub
+    timeout-minutes: 360
 
     steps:
-      - name: Configure Windows Settings
+      - name: Force Disable Password Policy & Create User
         run: |
-          # تفعيل الـ RDP وإعدادات الوصول
+          # 1. تصدير سياسة الأمان الحالية
+          secedit /export /cfg config.inf
+          
+          # 2. تعديل السياسة لتعطيل التعقيد وطول الباسورد برمجياً
+          $config = Get-Content config.inf
+          $config = $config -replace "PasswordComplexity = 1", "PasswordComplexity = 0"
+          $config = $config -replace "MinimumPasswordLength = .*", "MinimumPasswordLength = 0"
+          $config | Set-Content config.inf
+          
+          # 3. إعادة تطبيق السياسة المعدلة على النظام
+          secedit /configure /db $env:temp\temp.sdb /cfg config.inf /areas SECURITYPOLICY
+          
+          # 4. إنشاء المستخدم باستخدام PowerShell Core (أكثر استقراراً)
+          $Password = ConvertTo-SecureString "mohammad2020" -AsPlainText -Force
+          New-LocalUser -Name "mohammad_rdp" -Password $Password -Description "RDP User" -AccountNeverExpires
+          
+          # 5. إضافة الصلاحيات
+          Add-LocalGroupMember -Group "Administrators" -Member "mohammad_rdp"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "mohammad_rdp"
+          
+          # 6. تفعيل الـ RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
-          
-          # منع الجهاز من الخمول (Sleep)
-          powercfg /x -hibernate-timeout-ac 0
-
-      - name: Create RDP User (mohammad2020)
-        run: |
-          # إنشاء المستخدم وتعيين الباسورد
-          net user RDP_User mohammad2020 /add /y
-          net localgroup Administrators RDP_User /add
-          net localgroup "Remote Desktop Users" RDP_User /add
-          
-          # جعل الباسورد لا ينتهي أبداً
-          wmic useraccount where name='RDP_User' set passwordexpires=false
 
       - name: Install and Connect Tailscale
         run: |
@@ -42,13 +49,12 @@ jobs:
         run: |
           Write-Host "========================================"
           Write-Host "RDP Address: $env:TS_IP"
-          Write-Host "Username: RDP_User"
+          Write-Host "Username: mohammad_rdp"
           Write-Host "Password: mohammad2020"
           Write-Host "========================================"
           
-          # حلقة البقاء حياً لمنع إغلاق السيرفر
           $i = 0
           while($true) {
-            Write-Host "RDP is Active... Time: $(Get-Date)"
+            Write-Host "RDP Active... [$(Get-Date)]"
             Start-Sleep -Seconds 60
           }
